@@ -26,13 +26,19 @@ class ModifierData:
         self.tags=obj["tags"]
     def save(self):
         str=self.serialize(self)
-        with open(rPath / "krita_ai_modifiers.config", 'w', encoding='utf-8') as f_out:
-            f_out.write(str)
+        Krita.instance().writeSetting ("SDPlugin", "Modifiers", str)
+
+#        with open(rPath / "krita_ai_modifiers.config", 'w', encoding='utf-8') as f_out:#
+#            f_out.write(str)
     def load(self):
-        if (not (rPath / "krita_ai_modifiers.config").exists()): return
-        with open(rPath / "krita_ai_modifiers.config", 'r', encoding='utf-8') as f_in:
-             str=f_in.read()
+        str=Krita.instance().readSetting ("SDPlugin", "Modifiers",None)
+        if (not str): return
         self.unserialize(self,str)    
+
+#        if (not (rPath / "krita_ai_modifiers.config").exists()): return
+#        with open(rPath / "krita_ai_modifiers.config", 'r', encoding='utf-8') as f_in:
+ #            str=f_in.read()
+  #      self.unserialize(self,str)    
 
 class SDConfig:
     "This is Stable Diffusion Plugin Main Configuration"     
@@ -74,13 +80,18 @@ class SDConfig:
         self.height=obj.get("height",512)
     def save(self):
         str=self.serialize(self)
-        with open(rPath / "krita_ai.config", 'w', encoding='utf-8') as f_out:
-            f_out.write(str)
+        Krita.instance().writeSetting ("SDPlugin", "Config", str)
+
+#        with open(rPath / "krita_ai.config", 'w', encoding='utf-8') as f_out:
+ #           f_out.write(str)
     def load(self):
-        if (not (rPath / "krita_ai_modifiers.config").exists()): return
-        with open(rPath / "krita_ai.config", 'r', encoding='utf-8') as f_in:
-            str=f_in.read()
+        str=Krita.instance().readSetting ("SDPlugin", "Config",None)
+        if (not str): return
         self.unserialize(self,str)
+      #  if (not (rPath / "krita_ai_modifiers.config").exists()): return
+
+#        with open(rPath / "krita_ai.config", 'r', encoding='utf-8') as f_in:
+#            str=f_in.read()
 
 SDConfig.load(SDConfig)
 
@@ -102,6 +113,8 @@ class SDParameters:
     inpaint_mask_content="latent noise" 
     mode="txt2img"
     strength = 1 
+    tiling = False
+    restore_faces =False 
 
 def errorMessage(text,detailed):
     msgBox= QMessageBox()
@@ -149,7 +162,7 @@ class SDConfigDialog(QDialog):
         h_layout_inpaint.addWidget(self.inpaint_mask_blur,stretch=1)
         h_layout_inpaint.addWidget(QLabel('Masked Content:'),stretch=1)
         self.inpaint_mask_content = QComboBox()
-        self.inpaint_mask_content.addItems(['fill', 'original', 'latent noise', 'latent nothing'])
+        self.inpaint_mask_content.addItems(['fill', 'original', 'latent noise', 'latent nothing','g-diffusion'])
         self.inpaint_mask_content.setCurrentText(SDConfig.inpaint_mask_content)
         h_layout_inpaint.addWidget(self.inpaint_mask_content,stretch=1)      
         h_layout_inpaint.addWidget(QLabel(''),stretch=5)
@@ -312,11 +325,21 @@ class SDDialog(QDialog):
 
         steps_label=QLabel("Steps")
         steps_label.setToolTip("more steps = slower but often better quality. Recommendation start with lower step like 15 and update in image overview with higher one like 50")
-
+       
         formLayout.addWidget(steps_label)        
         self.steps=self.addSlider(formLayout,data["steps"],1,250,5,1)
+
+        checkBoxLayout = QHBoxLayout()
+        self.restore_faces= QCheckBox("Restore Faces")
+        self.restore_faces.setChecked(data.get("restore_faces",False))
+        checkBoxLayout.addWidget(self.restore_faces)
+        self.tiling= QCheckBox("Tiling")
+        self.tiling.setChecked(data.get("tiling",False))
+        checkBoxLayout.addWidget(self.tiling)
+        formLayout.addLayout(checkBoxLayout)
         formLayout.addWidget(QLabel("Number images"))        
         self.num=self.addSlider(formLayout,data["num"],1,4,1,1)
+
 
 
         formLayout.addWidget(QLabel(""))        
@@ -376,7 +399,9 @@ class SDDialog(QDialog):
         SDConfig.dlgData["cfg_value"]=self.cfg_value.value()/10
         SDConfig.dlgData["modifiers"]=self.modifiers.toPlainText()
         SDConfig.dlgData["sampling_method"]=self.sampling_method.currentText()
-        
+        SDConfig.dlgData["tiling"]=self.tiling.isChecked()
+        SDConfig.dlgData["restore_faces"]=self.restore_faces.isChecked()
+
         if SDConfig.dlgData["mode"] in ("img2img", "inpainting"):
             SDConfig.dlgData["strength"]=self.strength.value()/100
         SDConfig.save(SDConfig)
@@ -385,7 +410,6 @@ def selectImage(p: SDParameters,qImg):
     d = Application.activeDocument()
     n = d.activeNode()
     s = d.selection()        
-    print("result at :",s.x(),s.y(),"width,height:",s.width(),s.height())
     root = d.rootNode()
     n = d.createNode(p.prompt, "paintLayer")
     root.addChildNode(n, None)
@@ -400,6 +424,30 @@ def selectImage(p: SDParameters,qImg):
     n.setPixelData(QByteArray(ptr.asstring()),s.x(),s.y(),qImg.width(),qImg.height())
     d.waitForDone ()
     d.refreshProjection() 
+class showTiling(QDialog):
+    def __init__(self,qImg):
+        super().__init__(None)
+        self.setWindowTitle("Tiling Preview")
+        layout=QVBoxLayout()
+        imgLabel=QLabel()
+        h_layout=QHBoxLayout()
+        h_layout.addWidget(imgLabel) 
+        canvas = QtGui.QPixmap(750, 750)
+        imgLabel.setPixmap(canvas)
+        painter = QtGui.QPainter(imgLabel.pixmap())
+        qp=QPixmap.fromImage(qImg).scaled(250,250,Qt.KeepAspectRatio)
+        height=qp.height()
+        painter.drawPixmap(0,0,qp)
+        painter.drawPixmap(250,0,qp)
+        painter.drawPixmap(500,0,qp)
+        painter.drawPixmap(0,height,qp)
+        painter.drawPixmap(250,height,qp)
+        painter.drawPixmap(500,height,qp)
+        painter.drawPixmap(0,height*2,qp)
+        painter.drawPixmap(250,height*2,qp)
+        painter.drawPixmap(500,height*2,qp)
+        layout.addLayout(h_layout)
+        self.setLayout(layout)
 
 # asking for image of result set and update option
 class showImages(QDialog):
@@ -435,6 +483,9 @@ class showImages(QDialog):
             imgLabel=QLabel()
             v_layout.addWidget(imgLabel) 
             imgLabel.setPixmap(QPixmap.fromImage(qImg).scaled(380,380,Qt.KeepAspectRatio))  
+            if p.tiling:
+                imgLabel.mousePressEvent = (lambda ch, num=i: self.clickImage(self.qImgs[num]))
+
             seedLabel=QLabel(p.seedList[i])
             seedLabel.setTextInteractionFlags(Qt.TextSelectableByMouse)
             self.seedLabel[i]=seedLabel
@@ -460,6 +511,14 @@ class showImages(QDialog):
             self.strength_update=SDDialog.addSlider(self,top_layout,SDConfig.dlgData.get("strength",0.5)*100,0,100,1,100)
 
         self.setLayout(top_layout)
+
+    def clickImage(self,qImg):
+        dlg = showTiling(qImg)
+        if dlg.exec():
+            print("Tiling closed")        
+
+
+
     # start request for HQ version of one image
     def regenerateStart(self):
         p = copy(self.SDParam)
@@ -553,31 +612,33 @@ def runSD(p: SDParameters):
     if (SDConfig.type=="Local"): Colab=False
     if (not p.seed): seed=-1
     else: seed=int(p.seed)
-    inpainting_fill_options= ['fill', 'original', 'latent noise', 'latent nothing']
+    inpainting_fill_options= ['fill', 'original', 'latent noise', 'latent nothing',"g-diffusion"]
     inpainting_fill=inpainting_fill_options.index(SDConfig.inpaint_mask_content)
     print(inpainting_fill)
-    j = {'prompt': p.prompt, \
-        'mode': p.mode, \
-        'initimage': {'image':p.image64, 'mask':p.maskImage64}, \
-        'steps':p.steps, \
-        'sampler':p.sampling_method, \
-        'mask_blur': SDConfig.inpaint_mask_blur, \
-        'inpainting_fill':inpainting_fill, \
-        'use_gfpgan': False, \
-        'batch_count': p.num, \
-        'cfg_scale': p.cfg_value, \
-        'denoising_strength': p.strength, \
-        'seed':seed, \
-        'height':SDConfig.height, \
-        'width':SDConfig.width, \
-        'resize_mode': 0, \
-        'upscaler':'RealESRGAN', \
-        'upscale_overlap':64, \
-        'inpaint_full_res':True, \
-        'inpainting_mask_invert': 0 \
+    j = {'prompt': p.prompt, 
+        'mode': p.mode, 
+        'initimage': {'image':p.image64, 'mask':p.maskImage64}, 
+        'steps':p.steps, 
+        'sampler':p.sampling_method, 
+        'mask_blur': SDConfig.inpaint_mask_blur, 
+        'inpainting_fill':inpainting_fill, 
+        'tiling':p.tiling,
+        'restore_faces':p.restore_faces,
+        'use_gfpgan': False, 
+        'batch_count': p.num, 
+        'cfg_scale': p.cfg_value, 
+        'denoising_strength': p.strength, 
+        'seed':seed, 
+        'height':SDConfig.height, 
+        'width':SDConfig.width, 
+        'resize_mode': 0, 
+        'upscaler':'RealESRGAN', 
+        'upscale_overlap':64, 
+        'inpaint_full_res':True, 
+        'inpainting_mask_invert': 0 
         }    
 
-    #print(j)
+    print(j)
     data = json.dumps(j).encode("utf-8")
     res=getServerData(data)
     if not res: return    
@@ -656,6 +717,8 @@ def TxtToImage():
         p.steps=data["steps"]
         p.seed=data["seed"]
         p.num=data["num"]
+        p.restore_faces=data["restore_faces"]
+        p.tiling=data["tiling"]        
         p.sampling_method=data["sampling_method"]
         p.cfg_value=data["cfg_value"]
         images = runSD(p)
@@ -691,6 +754,8 @@ def ImageToImage():
         p.steps=data["steps"]
         p.seed=data["seed"]
         p.num=data["num"]
+        p.restore_faces=data["restore_faces"]
+        p.tiling=data["tiling"]        
         p.cfg_value=data["cfg_value"]
         p.image64=image64
         p.strength=data["strength"]
@@ -759,6 +824,8 @@ def Inpainting():
         p.steps=data["steps"]
         p.seed=data["seed"]
         p.num=data["num"]
+        p.restore_faces=data["restore_faces"]
+        p.tiling=data["tiling"]
         p.cfg_value=data["cfg_value"]
         p.strength=data["strength"]
         p.image64=image64
@@ -775,6 +842,7 @@ def Config():
 # expand selection to max size        
 def expandSelection():
     d = getDocument()
+
     if (d==None): return
     s = d.selection()    
     if (not s):  x=0;y=0
